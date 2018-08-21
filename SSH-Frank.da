@@ -1,0 +1,266 @@
+"""
+Secure Shell (SSH) Transport Layer Protocol
+
+Source: T. Ylonen
+"RFC: 4253 - The Secure Shell (SSH) Transport Layer Protocol"
+January 2006
+
+SSH Key Exchange Protocol Diagram (RFC 4253, p. 17-p. 21)
+1. Client -> Server : Algorithm Packets
+2. *Client -> Server : Guess Attempt
+3. Server -> Client : Algorithm Packets
+4. *Server -> Client : Guess Attempt
+5. Client -> Server : Key Exchange Request
+6. Server -> Client : Key Exchange
+"""
+
+from sa.secalgo import *
+from sa.sec_algo_pycrypto import *
+from Crypto.Hash import SHA256
+
+configure(verify_returns = 'bool')
+configure(benchmark = True)
+
+#Message Numbers
+SSH_MSG_KEXINIT = 20
+SSH_MSG_KexDH_INIT = 30 # Not Explicitly showed in the paper
+SSH_MSG_KexDH_REPLY = 31 # Not Explicitly showed in the paper
+SSH_MSG_NEWKEYS = 32 # Not Explicitly showed in the paper
+
+# If there is no guess attempt or the guess attempt is wrong, use this method to iterate through each namelist containing protocols
+# The first parameter SHOULD always be client's list. The second parameter SHOULD always be server's list
+# This method compares the CLIENTLIST to the SERVERLIST! NOT the other way around!
+
+def iterate_protocol(client_list, server_list):
+        for protocol_client in client_list:
+                if protocol_client in server_list :
+                                return protocol_client
+        return None
+        
+ 
+#Here, the client and server basically does the same thing. After they both exchange protocol namelists, they start iterating through the namelists. The whole process ends when both server and client has a series of protocol to use   
+
+#Also, we assume that both client and server will use Diffie-Hellman Key Exchange     
+
+class ssh_client(process):
+        def setup(kex_algo_client, 
+                server_host_key_algo_client, 
+                encryption_ctos_client, 
+                encryption_stoc_client, 
+                mac_ctos_client, 
+                compression_ctos_client, 
+                conpression_stoc_client, 
+                languages_ctos_client, 
+                language_stoc_client, 
+                guess_client,                   #Boolean value. Determines if a guess attempt is made
+                host_key_server_public,         #Server Public Key
+                server):
+                
+                pass
+        
+        def run():
+                cookie_client = keygen('random', 16)
+                
+                client_list =   (kex_algo_client, 
+                                server_host_key_algo_client, 
+                                encryption_ctos_client, 
+                                encryption_stoc_client, 
+                                mac_ctos_client, 
+                                compression_ctos_client, 
+                                conpression_stoc_client, 
+                                languages_ctos_client, 
+                                language_stoc_client,
+                                host_key_server_public)
+                
+                I_C = (SSH_MSG_KEXINIT, cookie_client, client_list, guess_client, 0) #The payload of the SSH_MSG_KEXINIT message. Will be used later
+                
+                print("SSH starts")
+                
+                send((SSH_MSG_KEXINIT, (cookie_client, client_list, guess_client, 0)), to = server)
+                
+                print("Client: Sends the first message(SSH_MSG_KEXINIT)")
+                                
+                await(some(received((_SSH_MSG_KEXINIT, cookie_server, server_list, guess_server, reserved_server), from_ = server)))
+                
+                print("Client: Recevied the second message from the server")
+                
+                if (guess_server & guess_client):
+                        print("Client: Guess Attempt not implemented. Start iterating name-lists...")
+                else:
+                        print("Client: No Guess attempt made. Start iterating name-lists...")
+                
+                agreed_algorithms = []  #Save the algorithms that will be used later
+                
+                both_lists = zip(client_list, server_list)
+                
+                for pair in both_lists:
+                        agreed_algorithms.append(iterate_protocol(pair[0], pair[1])) 
+                                
+                print("Client: Done iterating protocols. Agreed algorithms saved for late use")
+                
+                x = int.from_bytes(keygen('random', 16), byteorder = 'little')
+                g = modp_groups[5]["g"]
+                p = modp_groups[5]["p"]
+                e = pow(g,x,p)
+                
+                send((SSH_MSG_KexDH_INIT, e), to = server)
+                
+                print("Client: Sends the third message to the server")
+                                
+                await(some(received((_SSH_MSG_KexDH_REPLY, K_S, f, sign_H), from_ = server)))
+                
+                print("Client: Received the fourth message from the server")
+               
+                I_S = (SSH_MSG_KEXINIT, cookie_server, server_list, guess_server, reserved_server)      # The payload of
+                
+                k = pow(f,x,p)
+                
+                hash = (self, server, I_C, I_S, K_S, e, f, k)
+                
+                if verify((hash, sign_H), K_S):
+                        send(SSH_MSG_NEWKEYS, to = server)
+                        print("Client: Sends the fifth message to the server")
+                        
+                        await(some(received(_SSH_MSG_NEWKEYS, from_ = server)))
+                        
+                        print("Client: Key exchange and algorithm negotiation completed. New key will be used from now on. ")
+                
+                else:
+                        print("Verification failed. Client and Server disconnected")
+                
+                  
+class ssh_server(process):
+        def setup(kex_algo_server, 
+                server_host_key_algo_server, 
+                encryption_ctos_server, 
+                encryption_stoc_server, 
+                mac_ctos_server, 
+                compression_ctos_server, 
+                conpression_stoc_server, 
+                languages_ctos_server, 
+                language_stoc_server, 
+                guess_server,
+                host_key_server_private,
+                host_key_server_public):
+                
+                pass
+        
+        def run():
+                await(False)
+                
+
+        def receive(msg=(_SSH_MSG_KEXINIT, (cookie_client, client_list, guess_client, reserved_client)), from_=client):
+                print("Server: Received the first message from client")
+                cookie_server = keygen('random', 16)
+                
+                I_C = (SSH_MSG_KEXINIT, cookie_client, client_list, guess_client, reserved_client)
+                
+                server_list = (kex_algo_server, 
+                                server_host_key_algo_server, 
+                                encryption_ctos_server, 
+                                encryption_stoc_server, 
+                                mac_ctos_server, 
+                                compression_ctos_server, 
+                                conpression_stoc_server, 
+                                languages_ctos_server, 
+                                language_stoc_server)
+                
+                print("Server: Sends the second message to the client")
+                
+                send((SSH_MSG_KEXINIT, cookie_server, server_list, guess_server, 0), to = client)
+                
+                I_S = (SSH_MSG_KEXINIT, cookie_server, server_list, guess_server, 0)
+
+                agreed_algorithms = []
+                
+                both_lists = zip(client_list, server_list)
+                
+                for pair in both_lists:
+                        agreed_algorithms.append(iterate_protocol(pair[0], pair[1]))
+                        
+                await(some(received((_SSH_MSG_KexDH_INIT, e), from_ = server)))                
+               
+                print("Server: Received third message from the client")
+                
+                y = int.from_bytes(keygen('random', 16), byteorder = 'little')
+                g = modp_groups[5]["g"]
+                p = modp_groups[5]["p"]
+                f = pow(g,y,p)
+                k = pow(e,y,p)
+                hash = (client, self, I_C, I_S, host_key_server_public, e, f, k)
+                
+                s = sign(hash, key = host_key_server_private)
+                
+                send((SSH_MSG_KexDH_REPLY, host_key_server_public, f, s), to = client)
+                print("Server: Sends fourth message to the clinet") 
+                
+                await(some(received(_SSH_MSG_NEWKEYS, from_ = client)))
+                
+                print("Server: Received the fifth message from the client")
+                
+                send(SSH_MSG_NEWKEYS, to = client)   
+                      
+                print("Server: Key exchange and algorithm negotiation completed. New key will be used from now on. ") 
+                
+def main():
+        host_key_server_private, host_key_server_public = keygen('public')
+           
+        kex_algo_client = ["DF"]
+        server_host_key_algo_client = ["DSA"] 
+        encryption_ctos_client = ["AES"] 
+        encryption_stoc_client = ["AES"]
+        mac_ctos_client = ["SHA-1"]
+        compression_ctos_client = ["none"] 
+        conpression_stoc_client = ["none"]
+        languages_ctos_client = [] 
+        language_stoc_client = []
+        guess_client = False
+        
+        kex_algo_server = ["DF"]
+        server_host_key_algo_server = ["DSA"] 
+        encryption_ctos_server = ["AES"] 
+        encryption_stoc_server = ["AES"]
+        mac_ctos_server = ["SHA-1"]
+        compression_ctos_server = ["none"] 
+        conpression_stoc_server = ["none"]
+        languages_ctos_server = [] 
+        language_stoc_server =  []
+        guess_server = False           
+        
+        client = new(ssh_client)
+        server = new(ssh_server)
+        
+        setup(client, 
+                (kex_algo_client, 
+                server_host_key_algo_client, 
+                encryption_ctos_client, 
+                encryption_stoc_client, 
+                mac_ctos_client, 
+                compression_ctos_client, 
+                conpression_stoc_client, 
+                languages_ctos_client, 
+                language_stoc_client, 
+                guess_client,
+                host_key_server_public,
+                server))
+          
+        setup(server, 
+                (kex_algo_server, 
+                server_host_key_algo_server, 
+                encryption_ctos_server, 
+                encryption_stoc_server, 
+                mac_ctos_server, 
+                compression_ctos_server, 
+                conpression_stoc_server, 
+                languages_ctos_server, 
+                language_stoc_server, 
+                guess_server,
+                host_key_server_private,
+                host_key_server_public))
+                           
+        start(server)
+        start(client)  
+        
+        
+                
+        

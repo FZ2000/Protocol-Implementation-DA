@@ -1,0 +1,101 @@
+"""
+Lowe's fixed version of Needham-Schroder Public Key
+Written by Jack Yu (Tested on 10/31/17)
+
+Original Source:
+Gavin Lowe. An attack on the Needham-Schroeder public key authentication protocol. Information Processing Letters, 56(3):131--136, November 1995.
+
+Immediate Source:
+Security Protocol Open Repository
+http://www.lsv.fr/Software/spore/nspkLowe.html
+
+Protocol Diagram:
+  (1) A -> S : (A, B)
+  (2) S -> A : sign((B, pkB), skS)
+  (3) A -> B : enc((Na, A), pkB)
+  (4) B -> S : (B, A)
+  (5) S -> B : sign((A, pkA), skS)
+  (6) B -> A : enc((Na, Nb, B), pkA)
+  (7) A -> B : enc(Nb, pkB)
+
+"""
+
+from sa.secalgo import *
+#configure(benchmark = True)
+
+class roleS (process):
+	def setup(skS, client_keys):
+		pass	
+
+	def run():                                                  #S won't operate at the initiation
+		if await(False): pass
+		elif timeout(10): pass
+
+	def receive(msg=('msg1', (A, B)), from_ = A):                   #A's msg asking for pkB
+		pkB = [x for (p,x) in client_keys if p == B].pop()      #sorting pkB
+		send(('msg2', sign((B, pkB), skS)), to = A)             # sign using skS
+
+	def receive(msg=('msg4', (B, A)), from_ = B):                   #B's msg asking for pkA
+		pkA = [x for (p,x) in client_keys if p == A].pop()      #sorting pkA
+		send(('msg5', sign((A, pkA), skS)), to = B)             #sign with skS
+
+class roleA (process):
+	def setup(skA, pkS, S, B):                             #A knows B so A can send msg to B first
+		pass
+
+	def run():
+		send(('msg1', (self, B)), to = S)                   #1st step send msg asking for pkB 
+
+		await(some(received(('msg2', sig_S), from_ = S),        #receive the signed msg
+			has = (verify(sig_S, key = pkS)[0] == B)))      #use pkS to verify
+		pkB = verify(sig_S, key = pkS)[1]                       #derive pkB with pkS
+
+		nA = nonce()                                            #generate nA to send to B 
+		send(('msg3', encrypt((nA, self), key = pkB)), to = B)  #encrypt using pkB send nA
+
+		await(some(received(('msg6', enc_BA), from_ = B),       #receive B's excrypted msg
+			has = (decrypt(enc_BA, key = skA)[0] == nA)))   #use skA to decrypt
+		nB = decrypt(enc_BA, key = skA)[1]
+
+		send(('msg7', encrypt((nB), key = pkB)), to = B)        #send nB back to B 
+
+		output('A authenticated B')
+
+class roleB (process):
+	def setup(skB, pkS, S):
+		pass
+
+	def run():
+		if await(False): pass                               #B won't operate at the initiation
+		elif timeout(10): pass
+
+	def receive(msg=('msg3', enc_AB), from_ = A):               #1st thing receive msg from A 
+		A == decrypt(enc_AB, key = skB)[1]                  #using skB to decrypt msg
+		nA = decrypt(enc_AB, key = skB)[0]                  #using skB to decrypt msg
+
+		send(('msg4', (self, A)), to = S)             #asking S for pkA to communicate with A 
+
+		await(some(received(('msg5', sig_S), from_ = S),        #receive S's signed msg 
+			has = (verify(sig_S, key = pkS)[0] == A)))      #verify singed msg 
+		pkA = verify(sig_S, key = pkS)[1]                       #derive pkS using pkS
+		nB = nonce()                                            #generate nonce to send 
+
+		send(('msg6', encrypt((nA, nB, self), key = pkA)), to = A) #send old thing and nB to A
+
+		await(some(received(('msg7', enc_AB2), from_ = A),      #receive A's encrypted nB
+			has = decrypt(enc_AB2, key = skB) == nB))       #decrypt msg to get nB back
+
+		output('B authenticated A') 
+def main():
+	skS, pkS = keygen('public')
+	skA, pkA = keygen('public')
+	skB, pkB = keygen('public')
+	A = new(roleA)
+	B = new(roleB)
+	S = new(roleS)
+	setup(S, (skS, [(A, pkA), (B, pkB)]))
+	setup(A, (skA, pkS, S, B))
+	setup(B, (skB, pkS, S))
+	start(S)
+	start(B)
+	start(A)

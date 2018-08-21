@@ -1,0 +1,107 @@
+"""
+Amended Needham-Schroeder Symmetric Key Key Exhange Protocol
+Written by Frank Zhou(Tested on 10/31/17)
+
+Original Source:
+R. Needham and M. Schroeder. Authentication revisited. Operating Systems Review, 21(7), January 1987.
+
+Immediate Source:
+Security Protocol Open Repository
+http://www.lsv.fr/Software/spore/nssk_amended.html
+
+Protocol Diagram:
+  (1) A -> B : A
+  (2) B -> A : enc((A, Nb), Kbs)
+  (3) A -> S : A, B, Na, enc((A, Nb), Kbs)
+  (4) S -> A : enc((Na, B, Kab, enc((Kab, Nb, A), Kbs)), Kas)
+  (5) A -> B : enc((Kab, Nb, A), Kbs)
+  (6) B -> A : enc(Nb, Kab)
+  (7) A -> B : enc(Nb-1, Kab)
+"""
+from sa.secalgo import *
+
+
+class RoleS (process):
+	def setup(Kas, Kbs):
+ 	       pass
+
+	def run():
+		if await(False): pass  
+		elif timeout(10): pass     
+
+	def receive(msg= ("m3",(A, B, Na, enc_BA)), from_= A):
+		#Receive third
+		print("4")
+		if A == decrypt(enc_BA, key = Kbs)[0]:
+			Nb = decrypt(enc_BA, key = Kbs)[1]
+			Kab = keygen('shared')
+			send(("m4" ,encrypt((Na, B, Kab, encrypt((Kab, Nb, A), Kbs)),
+					Kas)), to = A)
+			#Send fourth
+
+
+class RoleA (process):
+	def setup(B , Kas, S):
+        	pass
+
+	def run():
+		print("1")
+		send(("m1", self), to = B) #Send first
+		await(some(received(("m2", enc_BA), from_= B)))
+			# receive second
+		print("3")
+		Na = nonce()
+		send(("m3", (self, B, Na, enc_BA)), to = S ) #Send Third
+		await(some(received(("m4", enc_SA), from_= S),
+		   has = (decrypt(enc_SA, key = Kas)[0] == Na) and
+			 (decrypt(enc_SA, key = Kas)[1] == B)))           	
+			# Receive fourth
+		print("5")
+		Kab = decrypt(enc_SA, key = Kas)[2]
+		enc_SB = decrypt(enc_SA, key = Kas)[3]
+		send(("m5", enc_SB), to = B) #Send fifth
+		await(some(received(("m6", enc_BA), from_= B)))
+			#Receive sixth
+		Nb= decrypt(enc_BA, key = Kab)
+		send(("m7", encrypt((Nb-1), key = Kab)), to = B)
+		#Send seventh
+		output('A - Key Exchange Complete')
+
+
+class RoleB (process):
+	def setup(Kbs):
+		pass
+
+	def run():
+		if await(False): pass   
+		elif timeout(10): pass     
+
+	def receive(msg=("m1", A), from_= A):
+		print("2")	
+		#Receive first
+		Nb = nonce()
+		send(("m2", encrypt((A, Nb), Kbs)), to = A)#Send Second
+		await(some(received(("m5", enc_SB), from_= A),
+		   has = (decrypt(enc_SB, key = Kbs)[1] == Nb) and
+			 (decrypt(enc_SB, key = Kbs)[2] == A)))
+		# Receive fifth
+		Kab = decrypt(enc_SB, key = Kbs)[0]
+		send(("m6", encrypt(Nb, Kab)), to = A)# Send sixth
+		await(some(received(("m7", enc_AB), from_= A),
+                   has = ((Nb - 1) == decrypt(enc_AB, key = Kab))))
+		# Receive seventh
+		output('B - Key Exchange Complete')
+     		
+
+
+def main():
+	Kas = keygen('shared')
+	Kbs = keygen('shared')
+	S = new(RoleS, (Kas, Kbs))
+	B = new(RoleB, (Kbs,))
+	A = new(RoleA, (B, Kas, S))
+	start (A)
+	start (B)
+	start (S)	       
+     
+     

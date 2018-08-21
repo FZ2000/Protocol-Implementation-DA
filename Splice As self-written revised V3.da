@@ -1,0 +1,140 @@
+"""
+Protocol Diagram:
+1.   	C 	-> 	AS 	:   	C, S, N1
+2.   	AS 	-> 	C 	:   	AS, {AS, C, N1, pk(S)}sk(AS)
+3.   	C 	-> 	S 	:   	C, S, {C, T, L, {N2}pk(S)}sk(C)
+4.   	S 	-> 	AS 	:   	S, C, N3
+5.   	AS 	-> 	S 	:   	AS, {AS, S, N3, pk(C)}sk(AS)
+6.   	S 	-> 	C 	:   	S, C, {S, inc(N2)}pk(C)
+
+1. A -> S : A, B, N1
+2. S -> A : S, sign{S, A, N1, pk(B)}sk(s)
+3. A -> B : A, B, enc{ A, T, L, {N2}pk(B)}sk(A)
+4. B -> S : B, A, N3
+5. S -> B : S, sign{S, B, N3, pk(A)}sk(S)
+6. B -> A : B, A, enc{B, inc(N2)}pk(A)
+
+T - timestamp
+L - lifetime 
+timestamp https://www.slideshare.net/prashantism/timestamp-protocols
+"""
+
+from sa.secalgo import *
+#configure(benchmark = True) #CMK: Remove this
+
+class roleS (process):
+        def setup(skS, client_keys):
+                pass	
+
+        def run():
+	        await(False)
+
+        def receive(msg=('msg1', (A, B, N1)), from_ = A):
+                print('2')                
+                pkB = [x for (p,x) in client_keys if p == B].pop()
+                send(('msg2', (self, sign((self, A, N1, pkB), key = skS))), to = A)
+                print('3')            
+        def receive(msg=('msg4', (B, A, N3)), from_ = B):
+                print('8')
+                pkA = [x for (p,x) in client_keys if p == A].pop()
+                send(('msg5', (self, sign((self, B, N3, pkA), key = skS))), to = B)
+                print('9')     
+                                 
+
+class roleA (process):
+        def setup(skA, pkA, S, B, pkS):                           
+                pass
+
+        def run():
+        
+                N1 = nonce() 
+                send(('msg1', (self, B, N1)), to = S)
+                print('1')
+                               
+                await(some(received(('msg2', (_S, sig_S)), from_ = _S)))
+                print('4')
+                if verify(sig_S, key = pkS)[0] != S:
+                        print('Error in verifying msg2')
+                        exit()
+                else:
+                        A = verify(sig_S, key = pkS)[1]
+                        N1 = verify(sig_S, key = pkS)[2]
+                        pkB = verify(sig_S, key = pkS)[3]
+		
+                N2 = nonce()
+                enc_N2 = encrypt(N2, key = pkB)
+                timeStamp = time.time()
+                lifeTime = 3600
+                send(('msg3', self, B, sign((self, timeStamp, lifeTime, enc_N2), key = skA)), to = B)
+                print('5')
+
+                await(some(received(('msg6', (B, A, enc_BA)), from_ = B)))
+                print('12')
+                if decrypt(enc_BA, key = skA)[0] != B:
+                        print('Error in decrypting msg6')
+                        exit()
+                else:
+                        NB2 = decrypt(enc_BA, key = skA)[1]
+                if NB2 == N2:
+                        print('A - key exchange complete')
+                else:
+                        print('Error in matching N2')
+
+			
+class roleB (process):
+        def setup(skB, pkB, S, pkS):
+                pass
+
+        def run():
+	        await(False)
+
+        def receive(msg=('msg3', A, _B, sig_A), from_ = A):
+                print('6')   
+                N3 = nonce()        
+
+                send(('msg4', (self, A, N3)), to = S)
+                print('7')
+
+                await(some(received(('msg5', (_S, sig_S)), from_ = _S)))
+                print('10')
+                if verify(sig_S, key = pkS)[0] != S:
+                        print('Error in verifying msg5')
+                        exit()
+                else:
+                        B = verify(sig_S, key = pkS)[1]
+                        N3 = verify(sig_S, key = pkS)[2]
+                        pkA = verify(sig_S, key = pkS)[3]
+		
+                if A == verify(sig_A, key = pkA)[0]:
+                        timeB = time.time()
+                        timeStamp = verify(sig_A, key = pkA)[1]
+                        lifeTime = verify(sig_A, key = pkA)[2]
+                        enc_N2A = verify(sig_A, key = pkA)[3]
+        
+                        if timeB <= timeStamp + lifeTime:
+                                N2 = decrypt(enc_N2A, key = skB)
+                        else:
+                                print('Error in matching time')
+                else:
+                        print('Error in identifying enc_AB')
+                        
+                send(('msg6', (self, A, encrypt((self, N2), key = pkA))), to = A)
+                print('11')
+                output('B - key exchange complete')
+		
+
+		
+		
+def main():
+        skS, pkS = keygen('public')
+        skA, pkA = keygen('public')
+        skB, pkB = keygen('public')
+        S = new(roleS)
+        A = new(roleA)
+        B = new(roleB)
+        setup(S, (skS, [(A, pkA), (B, pkB)]))
+        setup(A, (skA, pkA, S, B, pkS))
+        setup(B, (skB, pkB, S, pkS))
+        start(S)
+        start(A)
+        start(B)

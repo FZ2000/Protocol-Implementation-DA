@@ -1,0 +1,170 @@
+"""
+SK3
+Written by Frank Zhou
+
+Original Source:
+Victor Shoup and Avi Rubin.  Session key distribution usingsmart cards. 
+In In Proceedings of Advances in Cryptology, EU-ROCRYPT’96, volume 1070 of LNCS. Springer-Verlag, 1996.
+
+Immediate Source:
+Security Protocol Open Repository
+http://www.lsv.fr/Software/spore/sk3.html
+
+Protocol Diagram:
+  (1) A -> S : (A, B)
+  (2) S -> A : Pab, enc((Pab, B, 2), Ka)
+  (3) A -> Ca : A
+  (4) Ca -> A : Na, enc((Na, 1, 1), Kac)
+  (5) A -> B : A, Na
+  (6) B -> Cb : A, Na
+  (7) Cb -> B : Nb, enc((Nb, 0, 0), Kab), enc((Na, Nb, 1), Kab), enc((Nb, 0, 1), Kab)
+  (8) B -> A : Nb, enc((Na, Nb, 1), Kab)
+  (9) A -> Ca : B, Na, Nb, Pab, enc((Pab, B, 2), Ka), enc((Na, Nb, 1), Kab), enc((Na, 1, 1), Kac) 
+  (10) Ca -> A: enc((Nb, 0, 0), Kab), enc((Nb, 0, 1), Kab)
+  (11) A -> B: enc((Nb, 0, 1), Kab)
+
+"""
+
+from sa.secalgo import *
+configure(sym_cipher = 'DES')
+
+def bxor(b1, b2): # use xor for bytes
+        result = b""
+        for b1, b2 in zip(b1, b2):
+                result += bytes([b1 ^ b2])
+        return result
+
+class RoleS (process):
+        def setup(Ka, Kb):
+                pass
+
+        def run():
+                if await(False): pass  
+                elif timeout(10): pass     
+
+        def receive(msg= ("m1", A, B), from_= A):
+                print("S Receives Message 1(A-->S)")
+                # Define enc_Kab using A & Kb for S
+                enc_Kab = encrypt((A, 0), Kb)
+                # Define Kab by slicing the first 8 characters for S
+                Kab = keygen(key_type = 'DES', block_mode = 'ECB', key_mat = enc_Kab[:8])
+                # Define enc_Pab using B & Ka for S          
+                enc_Pab = encrypt((B, 1), Ka)
+                # Define Pab using enc_Kab & enc_Pab for S
+                Pab = bxor(enc_Kab, enc_Pab)                
+                send(("m2" , Pab, encrypt((Pab, B, 2), Ka)), to = A)
+                print("S Sends Message 2 (S-->A)")
+
+
+class RoleA (process):
+        def setup(B, S, Ca, Kac):
+                pass
+
+        def run():
+                print("Start to run the protocol")
+                send(("m1", self, B), to = S) 
+                print("A Sends Message 1 (A-->S)")
+                await(some(received(("m2", Pab, enc_SA), from_= S)))
+                print("A Receives Message 2(S-->A)")
+                send(("m3", self), to = Ca)
+                print("A Sends Message 3 (A-->Ca)")
+                await(some(received(("m4", Na, enc_CA), from_= Ca), 
+                        has = (decrypt(enc_CA, key = Kac)[0] == Na)))
+                print("A Receives Message 4(Ca-->A)")
+                send(("m5", self, Na), to = B)
+                print("A Sends Message 5(A-->B)") 
+                await(some(received(("m8", Nb, enc_AV), from_= B)))
+                print("A Receives Message 8(B-->A)")
+                send(("m9", B, Na, Nb, Pab, enc_SA, enc_AV, enc_CA), to = Ca)
+                print("A Sends Message 9(A-->Ca)")
+                await(some(received(("m10", enc_SK, enc_BVA), from_= Ca)))
+                print("A Receives Message 10(Ca-->A)")
+                send(("m11", enc_BVA), to = B) 
+                print("A Sends Message 11(A-->b)")
+                print("A - Authorized")
+                
+class RoleB (process):
+        def setup(Cb, Kbc):
+                pass
+
+        def run():
+                if await(False): pass   
+                elif timeout(10): pass     
+
+        def receive(msg=("m5", A, Na), from_= A):
+                print("B Receives Message 5(A-->B)")
+                send(("m6", A, Na), to = Cb)
+                print("B Sends Message 5(B-->Cb)")
+                await(some(received(("m7", Nb, enc_SK, enc_AV, enc_BV), from_= Cb)))
+                print("B Receives Message 7(Cb-->B)")
+                send(("m8", Nb, enc_AV), to = A) 
+                print("B Sends Message 8(B-->A)")
+                await(some(received(("m11", enc_BVA), from_= Cb),
+                        has = (enc_BVA == enc_BV)))
+                print("B Receives Message 11(A-->B)")
+                #Verify two versions of enc_BV(One from Cb, one from A)
+                print("B - Authorized")
+
+class RoleCa (process):
+        def setup(Ka, Kac):
+                pass
+
+        def run():
+                if await(False): pass   
+                elif timeout(10): pass     
+
+        def receive(msg=("m3", A), from_= A):
+                print("Ca Receives Message 3(S-->A)")
+                Na = nonce()
+                enc_CA = encrypt((Na, 1, 1), Kac)
+                send(("m4", Na, enc_CA), to = A)
+                print("Ca sends Message 4(Ca-->A)")
+                await(some(received(("m9", B, Na, Nb, Pab, enc_SA, enc_AV, _enc_CA), from_= A)))
+                print("Ca Receives Message 9(A-->Ca)")
+                #Define enc_Pab by using B and Ka for Ca
+                enc_Pab = encrypt((B, 1), Ka)
+                #Define kab by using Pab and enc_Pab and slicing the first 8 characters for Ca
+                Kab = keygen(key_type = 'DES', block_mode = 'ECB', key_mat = bxor(Pab, enc_Pab)[:8])
+                #Verify enc_SA and enc_AV
+                if ((decrypt(enc_SA, key = Ka)[0] == Pab) 
+                and (decrypt(enc_SA, key = Ka)[1] == B)
+                and (decrypt(enc_AV, key = Kab)[0] == Na)
+                and (decrypt(enc_AV, key = Kab)[1] == Nb)):
+                        send(("m10", encrypt((Nb, 0, 0), Kab), encrypt((Nb, 0, 1), Kab)), to = A)
+                        print("Ca Sends Message 10(Ca-->A)")
+                        
+
+class RoleCb (process):
+        def setup(Kb, Kbc):
+                pass
+
+        def run():
+                if await(False): pass   
+                elif timeout(10): pass     
+
+        def receive(msg=("m6", A, Na), from_= B):
+                print("Cb Receives Message 6(B-->Cb)")
+                #Define Nb
+                Nb = nonce()
+                #Define enc_Kab by using A and Kb for Cb
+                enc_Kab = encrypt((A, 0), Kb)
+                #Define Kab by slicing the first 8 characters of enc_Kab for Cb
+                Kab = keygen(key_type = 'DES', block_mode = 'ECB', key_mat = enc_Kab[:8])
+                send(("m7", Nb, encrypt((Nb, 0, 0), Kab), encrypt((Na, Nb, 1), Kab), encrypt((Nb, 0, 1), Kab)), to = B) 
+                print("Cb Sends Message 7(Cb-->B)")
+
+def main():
+        Ka = keygen('shared', block_mode = 'ECB')
+        Kb = keygen('shared', block_mode = 'ECB')
+        Kac = keygen('shared', block_mode = 'ECB')
+        Kbc = keygen('shared', block_mode = 'ECB')
+        S = new(RoleS, (Ka, Kb))
+        Ca = new(RoleCa, (Ka, Kac))
+        Cb = new(RoleCb, (Kb, Kbc))
+        B = new(RoleB, (Cb, Kbc))
+        A = new(RoleA, (B, S, Ca, Kac))
+        start (A)
+        start (B)
+        start (S)              
+        start (Ca)     
+        start (Cb)

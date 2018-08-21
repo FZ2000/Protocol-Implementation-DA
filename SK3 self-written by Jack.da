@@ -1,0 +1,149 @@
+"""
+A, B, S, Ca, Cb :   	principal
+Ka, Kb :   	symkey
+Kac, Kbc :   	symkey
+Na, Nb :   	nonce
+0,1,2 :   	number
+alias Kab = {A, 0}Kb
+alias Pab = Kab + {B, 1}Ka
+
+1.   	A 	-> 	S 	:   	A, B
+2.   	S 	-> 	A 	:   	Pab, {Pab, B, 2}Ka
+3.   	A 	-> 	Ca 	:   	A
+4.   	Ca 	-> 	A 	:   	Na, {Na, 1, 1}Kac
+5.   	A 	-> 	B 	:   	A, Na
+6.   	B 	-> 	Cb 	:   	A, Na
+7.   	Cb 	-> 	B 	:   	Nb, {Nb, 0, 0}Kab, {Na, Nb, 1}Kab, {Nb, 0, 1}Kab
+8.   	B 	-> 	A 	:   	Nb, {Na, Nb, 1}Kab
+9.   	A 	-> 	Ca 	:   	B, Na, Nb, Pab, {Pab, B, 2}Ka, {Na, Nb, 1}Kab, {Na, 1, 1}Kac
+10.   	Ca 	-> 	A 	:   	{Nb, 0, 0}Kab, {Nb, 0, 1}Kab
+11.   	A 	-> 	B 	:   	{Nb, 0, 1}Kab
+
+"""
+
+from sa.secalgo import *
+configure(sym_cipher = 'DES')
+
+def bxor(b1, b2): # use xor for bytes
+	result = b""
+	for b1, b2 in zip(b1, b2):
+		result += bytes([b1 ^ b2])
+	return result
+
+class RoleS (process):
+	def setup(Ka,Kb):
+		pass	
+
+	def run():                                                 
+		if await(False): pass
+		elif timeout(10): pass
+
+	def receive(msg=('msg1', (A, B)), from_ = A):                  
+		enc_Kab = encrypt((A, 0), Kb)
+		Kab = keygen(key_type = 'DES', block_mode = 'CBC', key_mat = enc_Kab)
+		enc_Ka = encrypt((B,1), Ka)
+		Pab = keygen(key_type = 'DES', block_mode = 'CBC', key_mat = bxor(enc_Kab, enc_Ka))
+ 
+		send(('msg2', (Pab, encrypt((Pab, B, 2), Ka))), to = A)           
+        
+
+class RoleCa (process):
+	def setup(Ka,Kac):
+		pass
+
+	def run():
+		if await(False): pass
+		elif timeout(10): pass
+
+	def receive(msg=('msg3', A), from_= A):
+
+		Na = nonce()
+		send(('msg4', (Na, encrypt((Na, 1, 1), Ka))), to = A)
+		
+		await(some(received(('msg9', B, Na, Nb, Pab, enc_SA, enc_AV, enc_NaV), from_= A)))
+		
+		enc_Ka = encrypt((B,1), Ka)
+		Kab = keygen(keytype = 'DES', block_mode = 'CBC', key_mat = bxor(Pab, enc_Pab))
+		
+		if((decrypt(enc_SA, key = Ka)[0] == Pab) and (decrypt(enc_SA, key = Ka)[1] == B)
+		and(decrypt(enc_AV, key = Kab)[0] == Na) and (decrypt(enc_AV, key = Kab)[1] == Nb)
+		and(decrypt(enc_NaV, key = Ka)[0] == Na)):
+			send(('msg10', encrypt((Nb, 0, 0), Kab), encrypt((Nb, 0, 1), Kab)), to = A)
+
+
+class RoleCb (process):
+	def setup(Kb, Kbc):
+		pass
+
+	def run():
+		if await(False): pass 
+		elif timeout(10): pass
+
+	def receive(msg=('msg6', (A, Na)), from_= B):
+		enc_Kab = encrypt((A, 0), Kb)
+		Kab = keygen(key_type = 'DES', block_mode = 'CBC', key_mat = enc_Kab)
+		
+		Nb = nonce()
+		send(('msg7', Nb, encrypt((Nb, 0, 0), Kab), encrypt((Na, Nb, 1), Kab), encrypt((Nb, 0, 1), Kab)), to = B)
+
+class RoleA (process):
+	def setup(B, S, Ca, Kac):                            
+		pass
+
+	def run():
+		send(('msg1', (self, B)), to = S)                  
+
+		await(some(received(('msg2', (Pab, enc_SA)), from_ = S)))           
+
+		send(('msg3', self), to = Ca)
+
+		await(some(received(('msg4', (Na, enc_NaV)), from_= Ca)))
+
+		send(('msg5', (self, Na)), to = B)  
+
+		await(some(received(('msg8', Nb, enc_Av), from_= B)))
+
+		send(('msg9', B, Na, Nb, Pab, enc_SA, enc_AV, enc_NaV), to = Ca)
+
+		await(some(received(('msg10', enc_SK, enc_BV2), from_= Ca)))
+
+		send(('msg11', enc_BV2), to = B)
+
+		output('A - Authorized')
+
+class RoleB (process):
+	def setup(Cb, Kbc):
+		pass
+
+	def run():
+		if await(False): pass                               
+		elif timeout(10): pass
+
+	def receive(msg=('msg5', (A, Na)), from_ = A):   
+            
+		send(('msg6', (A, Na)), to = Cb) 
+
+		await(some(received(('msg7', Nb, enc_SK, enc_AV, enc_BV), from_= Cb)))
+
+		send(('msg8', Nb, enc_AV), to = A)
+
+		await(some(received(('msg11', enc_BV2), from_ = A),
+			has = (enc_BV2 == enc_BV)))
+
+		output("B - Authorized")
+
+def main():
+	Ka = keygen('shared')
+	Kb = keygen('shared')
+	Kac = keygen('shared')
+	Kbc = keygen('shared')
+	S = new(RoleS, (Ka, Kb))
+	Ca = new(RoleCa, (Ka, Kac))
+	Cb = new(RoleCb, (Kb, Kbc))
+	B = new(RoleB, (Cb, Kbc))
+	A = new(RoleA, (B, S, Ca, Kac))
+	start (A)
+	start (B)
+	start (S)	       
+	start (Ca)     
+	start (Cb)
